@@ -67,13 +67,18 @@ sorted/LaunchBox/
 | `romsort status` | running, interrupted or idle; current step, progress and ETA; report summary |
 | `romsort log` | follow the detached run |
 | `romsort ui` | live dashboard in Neovim (0.10+): run, totals, check and log windows |
+| `:Romsort [status\|build\|plan\|check\|stop\|log\|report]` | the same from inside your own Neovim (see below) |
 | `romsort autostart on\|off` | add or remove a cron entry that resumes an interrupted run, e.g. after a reboot |
 | `romsort resume` | continue an interrupted run now (what cron calls; does nothing otherwise) |
 | `romsort stop` | stop the detached run and forget it |
 
 ### Dashboard
 
-`romsort ui` opens a dashboard in Neovim with four windows that refresh every
+The checkout is also a Neovim plugin. Put it on `runtimepath`, with any plugin
+manager or `vim.opt.rtp:append('/path/to/romsort')`, and `:Romsort` opens the
+dashboard in its own tab in the Neovim you already have open; `q` closes the
+tab. `:Romsort build`, `:Romsort status` and the rest run the commands above
+(tab-completed). Outside Neovim, `romsort ui` opens the same dashboard with four windows that refresh every
 two seconds: **Run** (running, interrupted or idle, the current step, a
 progress bar and the ETA), **Totals** (what was renamed, merged and left
 unverified), **Check** (the last check result) and **Log** (the tail of

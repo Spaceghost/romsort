@@ -1,10 +1,11 @@
--- dashboard.lua - a live romsort dashboard that runs inside Neovim.
+-- romsort/dashboard.lua - a live romsort dashboard that runs inside Neovim.
 --
---   romsort ui            (runs: nvim --clean -c "lua require'dashboard'.open(...)")
+--   :Romsort              in your own Neovim (plugin/romsort.lua), in a new tab
+--   romsort ui            standalone: nvim --clean with only the dashboard
 --
--- Four windows, refreshed every two seconds from the files a run writes in the
--- state directory, so it can be opened and closed at any time without touching
--- the run itself:
+-- Four windows, refreshed every two seconds while the tab is in view, from the
+-- files a run writes in the state directory. It only reads them, so it can be
+-- opened and closed at any time without touching the run itself:
 --
 --   +-- Run ----------------+-- Totals -------------+
 --   | state, step, bar, ETA | report counts         |
@@ -14,7 +15,7 @@
 --   | tail of run.log, follows                      |
 --   +-----------------------------------------------+
 --
--- Keys: q quit · r refresh · b start build · p start plan · x stop the run
+-- Keys: q close · r refresh · b start build · p start plan · x stop the run
 --       L full log · R full report · ? help
 local M = {}
 local api, uv = vim.api, vim.uv or vim.loop
@@ -190,6 +191,7 @@ local function paint(name)
 end
 
 local function refresh()
+  if S.tab and S.tab ~= api.nvim_get_current_tabpage() then return end -- out of view: idle
   for name in pairs(S.wins) do paint(name) end
 end
 
@@ -220,18 +222,40 @@ end
 local function help()
   vim.notify(table.concat({
     'romsort dashboard',
-    '  q quit (the run keeps going)   r refresh now',
+    '  q close (the run keeps going)   r refresh now',
     '  b start a build   p start a plan   x stop the run',
     '  L open the full log   R open the full report',
   }, '\n'))
 end
 
-function M.open(state, bin, cfg)
+local function stop_timer()
+  if S.timer then S.timer:stop(); S.timer:close(); S.timer = nil end
+end
+
+local function close()
+  stop_timer()
+  if S.standalone or #api.nvim_list_tabpages() == 1 then return vim.cmd('qa!') end
+  if S.tab and api.nvim_tabpage_is_valid(S.tab) then
+    api.nvim_set_current_tabpage(S.tab)
+    vim.cmd('tabclose')
+  end
+end
+
+-- opts: state (dir), bin (the romsort launcher), cfg (config file), and
+-- standalone = true when this Neovim exists only to show the dashboard.
+function M.open(opts)
   if vim.v.vim_did_enter == 0 then -- -c runs before startup finishes; wait for it
-    api.nvim_create_autocmd('VimEnter', { once = true, callback = function() M.open(state, bin, cfg) end })
+    api.nvim_create_autocmd('VimEnter', { once = true, callback = function() M.open(opts) end })
     return
   end
-  S = { state = state, bin = bin, cfg = cfg, wins = {}, last = {} }
+  if S.tab and api.nvim_tabpage_is_valid(S.tab) then -- already open: go to it
+    api.nvim_set_current_tabpage(S.tab)
+    S.last = {}
+    return refresh()
+  end
+  stop_timer()
+  S = { state = opts.state, bin = opts.bin, cfg = opts.cfg, standalone = opts.standalone, wins = {}, last = {} }
+  local state = S.state
 
   for g, spec in pairs({
     RomsortTitle = { link = 'TabLineSel' }, RomsortHead = { link = 'Title' },
@@ -240,9 +264,14 @@ function M.open(state, bin, cfg)
     RomsortRun = { link = 'DiagnosticInfo' }, RomsortBar = { link = 'DiagnosticInfo' },
   }) do api.nvim_set_hl(0, g, vim.tbl_extend('keep', spec, { default = true })) end
 
-  vim.o.laststatus, vim.o.showmode, vim.o.ruler, vim.o.cmdheight = 0, false, false, 1
-  vim.o.mouse = 'a'
-  vim.cmd('silent! only')
+  if S.standalone then
+    vim.o.laststatus, vim.o.showmode, vim.o.ruler, vim.o.mouse = 0, false, false, 'a'
+    vim.cmd('silent! only')
+  else
+    vim.cmd('tabnew')
+  end
+  S.tab = api.nvim_get_current_tabpage()
+  local blank = api.nvim_get_current_buf()
 
   local run = api.nvim_get_current_win()
   vim.cmd('botright split')
@@ -256,7 +285,7 @@ function M.open(state, bin, cfg)
   local check = api.nvim_get_current_win()
   api.nvim_win_set_height(run, 11)
 
-  for name, spec in pairs({ run = { run, 'Run' }, totals = { totals, 'Totals' },
+  for name, spec in pairs({ run = { run, 'romsort · Run' }, totals = { totals, 'Totals' },
                             check = { check, 'Check' }, log = { log, 'Log  ' .. state .. '/run.log' } }) do
     local buf = scratch(name)
     vim.wo[spec[1]].winfixbuf = false
@@ -264,7 +293,7 @@ function M.open(state, bin, cfg)
     dress(spec[1], spec[2])
     S.wins[name] = spec[1]
     local function map(lhs, fn) vim.keymap.set('n', lhs, fn, { buffer = buf, nowait = true, silent = true }) end
-    map('q', function() vim.cmd('qa!') end)
+    map('q', close)
     map('r', function() S.last = {}; refresh() end)
     map('b', function() if vim.fn.confirm('Start a build?', '&Yes\n&No', 2) == 1 then romsort('start', 'build') end end)
     map('p', function() if vim.fn.confirm('Start a plan (dry run)?', '&Yes\n&No', 2) == 1 then romsort('start', 'plan') end end)
@@ -273,12 +302,29 @@ function M.open(state, bin, cfg)
     map('R', function() vim.cmd('tabnew ' .. vim.fn.fnameescape(state .. '/report.txt')) end)
     map('?', help)
   end
+  if api.nvim_buf_is_valid(blank) and api.nvim_buf_get_name(blank) == '' and not vim.bo[blank].modified then
+    pcall(api.nvim_buf_delete, blank, {})
+  end
   api.nvim_set_current_win(run)
 
   refresh()
   S.timer = uv.new_timer()
   S.timer:start(2000, 2000, vim.schedule_wrap(refresh))
-  api.nvim_create_autocmd('VimResized', { callback = function() S.last = {}; refresh() end })
+  local group = api.nvim_create_augroup('romsort_dashboard', { clear = true })
+  api.nvim_create_autocmd({ 'VimResized', 'TabEnter' }, { group = group, callback = function() S.last = {}; refresh() end })
+  api.nvim_create_autocmd('TabClosed', { group = group, callback = function()
+    if S.tab and not api.nvim_tabpage_is_valid(S.tab) then stop_timer(); S.tab = nil; api.nvim_del_augroup_by_id(group) end
+  end })
+end
+
+-- Run a romsort command and show what it printed (for :Romsort status and friends).
+function M.run(opts, ...)
+  S.bin, S.cfg = opts.bin, opts.cfg
+  local r = vim.system({ opts.bin, ..., '--config', opts.cfg }, { text = true }):wait()
+  local msg = vim.trim((r.stdout or '') .. (r.stderr or ''))
+  vim.notify(msg ~= '' and msg or ('romsort ' .. table.concat({ ... }, ' ') .. ': done'),
+    r.code == 0 and vim.log.levels.INFO or vim.log.levels.WARN)
+  if S.tab then S.last = {}; refresh() end
 end
 
 -- For tests and `romsort ui --print`: render every pane once as plain text.

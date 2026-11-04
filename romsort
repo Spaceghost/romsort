@@ -8,7 +8,8 @@
 #   romsort resume                      continue an interrupted run (cron calls this)
 #   romsort autostart on|off            add/remove the cron entry that resumes after reboot
 #   romsort stop                        stop the detached run and forget it
-#   romsort ui [--print]                live dashboard in Neovim (windows: run, totals, check, log)
+#   romsort ui [--print]                live dashboard in Neovim (windows: run, totals, check, log);
+#                                       inside your own Neovim it is :Romsort (plugin/romsort.lua)
 #
 # A detached run is a "goal" file in the state dir. It stays there until the
 # run succeeds, so after a reboot, crash or kill `resume` simply starts it
@@ -105,11 +106,11 @@ log)
     ;;
 ui)
     command -v nvim >/dev/null 2>&1 || { echo "romsort: ui needs Neovim 0.10 or newer" >&2; exit 1; }
-    boot="package.path=[[$here/ui/?.lua;]]..package.path"
+    boot="package.path=[[$here/lua/?.lua;]]..package.path"
     if [ "${1:-}" = --print ]; then
-        exec nvim --clean --headless -c "lua $boot; io.stdout:write(require'dashboard'.render([[$state]]), '\n')" -c 'qa!'
+        exec nvim --clean --headless -c "lua $boot; io.stdout:write(require'romsort.dashboard'.render([[$state]]), '\n')" -c 'qa!'
     fi
-    exec nvim --clean -c "lua $boot; require'dashboard'.open([[$state]], [[$self]], [[$cfg]])"
+    exec nvim --clean -c "lua $boot; require'romsort.dashboard'.open({ state = [[$state]], bin = [[$self]], cfg = [[$cfg]], standalone = true })"
     ;;
 autostart)
     tag="# romsort-autostart $state"
