@@ -3,7 +3,7 @@
 # (op, src, dst). Never overwrites a file it did not create and never removes
 # anything except its own hardlinks to a source that still exists.
 #
-#   link    hardlink src -> dst; skip if already the same inode
+#   link    hardlink src -> dst; skip if already the same inode or same bytes
 #   copy    copy src -> dst if dst is absent
 #   recopy  overwrite dst with src (caller verified dst is our unmodified copy)
 #   unlink  remove dst only if it is the same inode as src
@@ -24,7 +24,8 @@ while IFS= read -r -d '' op && IFS= read -r -d '' src && IFS= read -r -d '' dst;
     case $op in
     link)
         if [ -e "$dst" ] || [ -L "$dst" ]; then
-            [ "$src" -ef "$dst" ] || echo "CONFLICT $dst"
+            # identical bytes from another copy of the source are just as good
+            [ "$src" -ef "$dst" ] || cmp -s -- "$src" "$dst" || echo "CONFLICT $dst"
         else
             ln -- "$src" "$dst" 2>/dev/null && echo "LINK $dst" || echo "FAIL link $dst"
         fi ;;

@@ -95,7 +95,7 @@ status)
     fi
     [ -f "$state/progress" ] && sed 's/^/  /' "$state/progress"
     echo
-    [ -f "$state/report.txt" ] && sed -n '1,/^$/p' "$state/report.txt"
+    [ -f "$state/report.txt" ] && awk '/^$/ && ++b == 2 { exit } 1' "$state/report.txt"
     [ -f "$state/check.txt" ] && head -5 "$state/check.txt"
     echo "full report: $state/report.txt   log: $state/run.log"
     ;;

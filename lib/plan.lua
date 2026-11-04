@@ -82,7 +82,8 @@ end
 function M:claim(rel, sha1, label)
   local key = rel:lower() -- LaunchBox runs on case-insensitive Windows
   local owner = self.taken[key]
-  if not owner or owner == sha1 then
+  if owner == sha1 then return rel, true end -- the same content already lives here
+  if not owner then
     self.taken[key] = sha1
     return rel
   end
@@ -110,8 +111,13 @@ function M:place(f, rel, mode, dedupe)
     self:count('duplicate content, linked to first copy')
     return
   end
-  rel = self:claim(rel, id, f.label)
+  local same
+  rel, same = self:claim(rel, id, f.label)
   self.placed[f.path] = rel
+  if same then
+    self:count('duplicate content, linked to first copy')
+    return
+  end
   if dedupe and f.sha1 then self.by_sha1[f.sha1] = rel end
   self.ops[#self.ops + 1] = { op = mode, src = f.path, dst = rel, inode = f.inode, size = f.size }
 end

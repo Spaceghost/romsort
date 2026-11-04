@@ -28,6 +28,9 @@ cp "$lb/Games/Nintendo Game Boy/tetris final.gb" "$R/F/cards/c1/GB/Tetris.gb"   
 printf 'UNKNOWN-GB%.0s' {1..8} > "$R/F/cards/c1/GB/mystery.gb"
 printf 'thumb' > "$R/F/cards/c1/GB/Imgs/mystery.png"
 printf 'arcade' > "$R/F/cards/c1/MAME/sf2.zip"
+for c in c1 c2; do                     # the same set in a per-game folder on two cards
+  mkdir -p "$R/F/cards/$c/MAME/000 Final Fight"; printf 'ffight-set' > "$R/F/cards/$c/MAME/000 Final Fight/ffight.zip"
+done
 
 t_sha=$(sha1sum < "$lb/Games/Nintendo Game Boy/tetris final.gb" | cut -c1-40 | tr a-f A-F)
 z_crc=$(unzip -lv "$lb/Games/Nintendo Game Boy/links awakening.zip" | awk '/zelda.gb/{print $7}' | tr a-f A-F)
@@ -108,6 +111,7 @@ C.sources = {
   { label = 'LB', root = '$lb/Games', layout = 'launchbox' },
   { label = 'P', root = '$R/P/Games', layout = 'launchbox' },
   { label = 'c1', root = '$R/F/cards/c1', layout = 'folders' },
+  { label = 'c2', root = '$R/F/cards/c2', layout = 'folders' },
 }
 C.jobs = 2
 return C
@@ -135,6 +139,8 @@ pass "first build and check pass"
 [ ! -e "$out/Games/Nintendo Game Boy/Unverified/Imgs/mystery.png" ] || fail "card thumbnails skipped"
 [ -f "$out/Games/Arcade/sf2.zip" ] || fail "arcade kept by set name"
 [ "$(find "$out/Games" -name 'Tetris*' | wc -l)" = 1 ] || fail "card duplicate deduped"
+[ "$(find "$out/Games/Arcade" -name 'ffight*' | wc -l)" = 1 ] || fail "same set on two cards placed once"
+! grep -q 'conflict=' "$work/build1.log" || fail "no conflicting ops in the plan"
 pass "placement rules"
 
 x="$out/Data/Platforms/Nintendo Game Boy.xml"
