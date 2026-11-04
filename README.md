@@ -12,6 +12,8 @@ cp config.lua my.lua        # point it at your drives
 
 Needs only `bash`, coreutils, findutils, `unzip` and Lua 5.1+ (LuaJIT is
 fastest). `7z` is optional; with it, `.7z` and `.rar` archives are matched too.
+It does not have to be on the host: `seven_zip` in the config can name a command
+such as `incus exec mybox -- 7z` that sees the same paths.
 
 ## What it does
 
@@ -27,8 +29,9 @@ sorted/LaunchBox/
 ```
 
 * **Verified names.** Every file is SHA-1 hashed (zip members by CRC, with
-  NES/Lynx/7800/SNES copier headers stripped) and matched against No-Intro and
-  Redump DATs from libretro-database. Matches get their canonical name.
+  NES/Lynx/7800/SNES copier headers stripped, trimmed GBA dumps padded back to
+  chip size) and matched against No-Intro and Redump DATs from
+  libretro-database. Matches get their canonical name.
 * **LaunchBox keeps working.** Every path in `Data/**/*.xml` is resolved,
   including `J:\` and `P:\` drive paths and wrong-case Windows names, and is
   rewritten to the file's new place. Only the path text changes; every other
@@ -40,8 +43,15 @@ sorted/LaunchBox/
 * **Nothing breaks that worked.** `romsort check` (run after every build)
   fails if any LaunchBox path that resolved in your original no longer
   resolves, points at different content, or if the XML differs anywhere
-  outside path values. Paths that were already broken are counted, left
-  exactly as they were and listed in `launchbox-missing-at-source.tsv`.
+  outside path values.
+* **Paths that were already broken get repaired when that is certain.** A game
+  whose `ApplicationPath` points nowhere (the release was moved into its own
+  folder, or a ROM pack was extracted and renamed) is pointed at the file under
+  the same platform folder with the same file name, or else the same title
+  (pack numbers, punctuation and extension ignored), but only when exactly one
+  such file exists. Repairs go to `launchbox-repaired.tsv` and `check` proves
+  each one resolves. The rest stay exactly as they were and are listed in
+  `launchbox-missing-at-source.tsv`. The original XML is never touched.
 * **Re-runnable.** Hashes are cached by size and mtime, so a rebuild only
   hashes what changed. A rebuild never overwrites a file you edited in the
   sorted library. If you edited a LaunchBox XML there, the new version is
@@ -110,7 +120,8 @@ running: build
 
 Everything a run produces lives in the state directory (`sorted/.romsort/`):
 `files.tsv` and `members.tsv` (the hash cache), `plan.tsv`, `manifest.tsv`,
-`report.txt`, `check.txt`, `launchbox-missing-at-source.tsv`, `progress`,
+`report.txt`, `check.txt`, `launchbox-missing-at-source.tsv`,
+`launchbox-repaired.tsv`, `progress`,
 `goal` (while a detached run is unfinished) and `run.log`.
 
 ## Configuration
@@ -127,6 +138,8 @@ Everything a run produces lives in the state directory (`sorted/.romsort/`):
   folders like `GBA`, `FC` or `megadrive` mapped through the platform aliases).
 * `platforms`: LaunchBox platform names, folder aliases, DATs, and
   `rename = false` for systems that must keep their filenames.
+* `seven_zip`: commands that can list `.7z`/`.rar`, tried in order. If none
+  works, those archives are simply listed on the next run that has one.
 
 Get the DATs with
 `git clone --depth 1 https://github.com/libretro/libretro-database` and
