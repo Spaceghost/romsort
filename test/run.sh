@@ -143,6 +143,12 @@ pass "first build and check pass"
 ! grep -q 'conflict=' "$work/build1.log" || fail "no conflicting ops in the plan"
 pass "placement rules"
 
+if command -v nvim >/dev/null 2>&1; then
+  "$here/romsort" ui --print --config "$work/config.lua" > "$work/ui.txt" 2>&1 || { cat "$work/ui.txt"; fail "dashboard renders"; }
+  grep -q 'check PASSED' "$work/ui.txt" && grep -q 'renamed to DAT name' "$work/ui.txt" || { cat "$work/ui.txt"; fail "dashboard shows check and totals"; }
+  pass "neovim dashboard renders"
+fi
+
 x="$out/Data/Platforms/Nintendo Game Boy.xml"
 grep -q '<ApplicationPath>Games\\Nintendo Game Boy\\Tetris (World) (Rev 1).gb</ApplicationPath>' "$x" || fail "tetris path rewritten"
 grep -q "Link's Awakening (USA, Europe).zip</ApplicationPath>" "$x" || fail "J: path rewritten relative"
