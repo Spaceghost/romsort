@@ -67,21 +67,26 @@ local function plan()
   local planner = PLAN.new(C)
   local all, by_path = {}, {}
 
-  for _, src in ipairs(C.sources) do
+  for i, src in ipairs(C.sources) do
+    local step = string.format('%s (source %d of %d)', src.label, i, #C.sources)
+    U.progress('walk ' .. step)
     local files, bad = SCAN.walk(src.root)
     U.log('source %-10s %7d files  %s', src.label, #files, src.root)
     if #bad > 0 then U.log('!! %d names with tab/newline skipped in %s', #bad, src.label) end
-    SCAN.hash(files, C.state, C.jobs)
+    SCAN.hash(files, C.state, C.jobs, step)
     for _, f in ipairs(files) do by_path[f.path] = f end
     all[#all + 1] = { src = src, files = files }
   end
+  U.progress('match against DATs')
   for _, s in ipairs(all) do planner:add_source(s.src, s.files) end
 
+  U.progress('walk LaunchBox install')
   local lbfiles = SCAN.walk(C.launchbox)
   U.log('launchbox  %7d files  %s', #lbfiles, C.launchbox)
   planner:add_launchbox(C.launchbox, lbfiles)
   for _, f in ipairs(lbfiles) do by_path[f.path] = by_path[f.path] or f end
 
+  U.progress('read LaunchBox XML')
   local docs = LB.scan(C.launchbox, C.drives, C.path_tag)
   local nref, nres = 0, 0
   for _, d in ipairs(docs) do
@@ -140,8 +145,12 @@ local function run_apply(records)
   local tally, notes = {}, {}
   for line in p:lines() do
     local word = line:match('^(%u+)')
-    tally[word] = (tally[word] or 0) + 1
-    if word ~= 'LINK' and word ~= 'COPY' and word ~= 'UNLINK' then notes[#notes + 1] = line end
+    if word == 'PROGRESS' then
+      U.progress('apply library changes', tonumber(line:match('%d+')), #records, 'ops')
+    else
+      tally[word] = (tally[word] or 0) + 1
+      if word ~= 'LINK' and word ~= 'COPY' and word ~= 'UNLINK' then notes[#notes + 1] = line end
+    end
   end
   p:close()
   os.remove(list)
@@ -252,6 +261,7 @@ end
 -- Every LaunchBox path that resolved in the original must resolve in the
 -- sorted root to the same content, and the XML may differ only in paths.
 check = function(planner, docs, by_path)
+  U.progress('check the library')
   if not docs then
     docs = LB.scan(C.launchbox, C.drives, C.path_tag)
   end
@@ -307,14 +317,23 @@ check = function(planner, docs, by_path)
   return #broken == 0
 end
 
+if cmd == 'plan' or cmd == 'build' or cmd == 'check' then
+  U.mkdirp(C.state)
+  U.progress_to(C.state .. '/progress')
+end
+local function finish(ok)
+  U.progress(cmd .. (ok and ' finished' or ' FAILED, see check.txt and run.log'), nil, nil, nil, true)
+  os.exit(ok and 0 or 1)
+end
 if cmd == 'plan' then
   local planner, docs = plan()
   write_report(planner, docs)
   io.write(U.read(C.state .. '/report.txt'))
+  finish(true)
 elseif cmd == 'build' then
-  os.exit(build() and 0 or 1)
+  finish(build())
 elseif cmd == 'check' then
-  os.exit(check() and 0 or 1)
+  finish(check())
 elseif cmd == 'status' then
   io.write(U.read(C.state .. '/report.txt') or 'no run yet\n')
   io.write(U.read(C.state .. '/check.txt') or '')

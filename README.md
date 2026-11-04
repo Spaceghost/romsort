@@ -63,13 +63,39 @@ sorted/LaunchBox/
 | `romsort plan` | scan, hash, match, write `plan.tsv` and `report.txt`; no library writes |
 | `romsort build` | plan, then create or update the library, then `check` |
 | `romsort check` | verify the library against the original LaunchBox install |
-| `romsort status` | print the last report and check result |
 | `romsort start [plan\|build]` | run detached at low priority, logging to `run.log` |
+| `romsort status` | running, interrupted or idle; current step, progress and ETA; report summary |
 | `romsort log` | follow the detached run |
+| `romsort autostart on\|off` | add or remove a cron entry that resumes an interrupted run, e.g. after a reboot |
+| `romsort resume` | continue an interrupted run now (what cron calls; does nothing otherwise) |
+| `romsort stop` | stop the detached run and forget it |
+
+### Long runs, reboots and progress
+
+`romsort start build` records the goal in the state directory and runs
+detached. The goal stays until the run succeeds. Every hash is written to the
+cache the moment it is computed, and every library change is atomic and safe to
+repeat. So after a reboot, crash or kill, `romsort resume` just runs it again
+and only the unfinished work is done. With `romsort autostart on`, cron does
+that every 10 minutes, and it waits quietly while the drives are not mounted.
+A run that genuinely fails three times is parked in `goal.failed` instead of
+retrying forever.
+
+While it runs, `sorted/.romsort/progress` (shown by `romsort status`) says the
+current step, how far through it the run is, and when that step should finish:
+
+```
+running: build
+  step:    hash P (source 2 of 10)
+  done:    212.4 / 552.0 GiB (38.5%)
+  eta:     Wed 11:40 (2h05m left in this step)
+  updated: Wed 2026-11-04 09:35:10 (run started Wed 08:01, 1h34m ago)
+```
 
 Everything a run produces lives in the state directory (`sorted/.romsort/`):
 `files.tsv` and `members.tsv` (the hash cache), `plan.tsv`, `manifest.tsv`,
-`report.txt`, `check.txt`, `launchbox-missing-at-source.tsv` and `run.log`.
+`report.txt`, `check.txt`, `launchbox-missing-at-source.tsv`, `progress`,
+`goal` (while a detached run is unfinished) and `run.log`.
 
 ## Configuration
 

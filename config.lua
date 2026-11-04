@@ -144,7 +144,7 @@ C.skip_dirs = { 'Imgs', 'images', 'image', 'media', 'mame2003-plus', '.sdlretro'
   'save', 'states', 'bios', 'BIOS', 'Movies', 'Music', 'trash' }
 -- Extensions that are never placed from 'folders' sources (thumbnails, saves).
 C.skip_ext = { 'png', 'jpg', 'jpeg', 'gif', 'bmp', 'db', 'srm', 'sav', 'state', 'xml', 'txt',
-  'fkcfg', 'ini', 'cfg' }
+  'fkcfg', 'ini', 'cfg', 'quicksave' }
 
 -- Files that belong to a multi-file disc image: renaming one breaks the others,
 -- so neither they nor anything sharing their folder is ever renamed.

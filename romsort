@@ -1,11 +1,21 @@
 #!/bin/bash
 # romsort - entry point. Everything else is in romsort.lua and lib/.
 #
-#   romsort plan | build | check | status     run in the foreground
-#   romsort start [build]                     run detached, log to the state dir
-#   romsort log                               follow the detached run
+#   romsort plan | build | check        run in the foreground
+#   romsort start [build|plan|check]    run detached; survives logout and reboot
+#   romsort status                      what it is doing, how far, when it ends
+#   romsort log                         follow the detached run
+#   romsort resume                      continue an interrupted run (cron calls this)
+#   romsort autostart on|off            add/remove the cron entry that resumes after reboot
+#   romsort stop                        stop the detached run and forget it
+#
+# A detached run is a "goal" file in the state dir. It stays there until the
+# run succeeds, so after a reboot, crash or kill `resume` simply starts it
+# again; hashes are cached, so finished work is not redone. Three real
+# failures in a row park the goal in goal.failed instead of retrying forever.
 set -euo pipefail
-here=$(cd "$(dirname "$(readlink -f "$0")")" && pwd)
+self=$(readlink -f "$0")
+here=$(dirname "$self")
 
 lua=
 for c in luajit lua5.4 lua5.3 lua5.1 lua; do
@@ -13,26 +23,108 @@ for c in luajit lua5.4 lua5.3 lua5.1 lua; do
 done
 [ -n "$lua" ] || { echo "romsort: needs luajit or lua 5.1+" >&2; exit 1; }
 
-state=$("$lua" -e "local C=dofile('$here/config.lua'); io.write(C.state)")
+cfg=$here/config.lua
+args=("$@")
+for ((i = 0; i < ${#args[@]}; i++)); do
+    [ "${args[i]}" = --config ] && cfg=$(readlink -f "${args[i + 1]:-}")
+done
+state=$("$lua" -e "local C=dofile('$cfg'); io.write(C.state)")
+cmd=${1:-}
+[ $# -gt 0 ] && shift
 
-case "${1:-}" in
+running() { [ -e "$state/lock" ] && ! flock -n "$state/lock" true; }
+
+spawn() {
+    local prio=(nice -n 10)
+    command -v ionice >/dev/null 2>&1 && prio+=(ionice -c 3)
+    setsid nohup "${prio[@]}" "$self" _run --config "$cfg" >>"$state/run.log" 2>&1 </dev/null &
+}
+
+case "$cmd" in
 start)
     mkdir -p "$state"
-    shift
-    setsid nohup nice -n 10 "$0" "${@:-build}" >>"$state/run.log" 2>&1 < /dev/null &
-    echo "romsort: running detached (pid $!); follow with: $0 log"
+    running && { echo "romsort: already running: $(head -1 "$state/goal")" >&2; exit 1; }
+    [ $# -gt 0 ] || set -- build
+    case $1 in plan|build|check) ;; *) echo "romsort: start plan|build|check" >&2; exit 2 ;; esac
+    printf '%s\n' "$@" --config "$cfg" >"$state/goal"
+    rm -f "$state/goal.failed" "$state/goal.failures"
+    spawn
+    echo "romsort: $1 running detached. Check on it with: $self status"
+    ;;
+resume)
+    # Quiet and harmless when there is nothing to do. If the drives are not
+    # mounted yet, the state dir is not there either, so cron just tries later.
+    [ -f "$state/goal" ] || exit 0
+    running && exit 0
+    spawn
+    ;;
+_run)
+    exec 9>"$state/lock"
+    flock -n 9 || exit 0
+    [ -f "$state/goal" ] || exit 0
+    mapfile -t goal <"$state/goal"
+    echo "=== romsort ${goal[*]} $(date '+%a %F %T %Z')"
+    rc=0
+    "$lua" "$here/romsort.lua" "${goal[@]}" || rc=$?
+    if [ $rc -eq 0 ]; then
+        rm -f "$state/goal" "$state/goal.failures"
+        echo "=== done $(date '+%a %F %T %Z')"
+    elif [ $rc -ge 128 ]; then
+        echo "=== stopped by signal $((rc - 128)); resume will continue it"
+    else
+        n=$(( $(cat "$state/goal.failures" 2>/dev/null || echo 0) + 1 ))
+        echo "$n" >"$state/goal.failures"
+        if [ "$n" -ge 3 ]; then
+            mv -f "$state/goal" "$state/goal.failed"
+            echo "=== failed $n times; parked in goal.failed. Fix it, then: romsort start ${goal[0]}"
+        else
+            echo "=== failed (exit $rc, attempt $n of 3); resume will retry"
+        fi
+    fi
+    exit $rc
+    ;;
+stop)
+    rm -f "$state/goal"
+    pkill -f -- "$here/romsort.lua" && echo "romsort: stopped" || echo "romsort: nothing running"
+    ;;
+status)
+    if running; then echo "running: $(head -1 "$state/goal" 2>/dev/null)"
+    elif [ -f "$state/goal" ]; then echo "interrupted: $(head -1 "$state/goal"); the next 'romsort resume' continues it (every 10 min with autostart on)"
+    elif [ -f "$state/goal.failed" ]; then echo "FAILED 3 times: $(head -1 "$state/goal.failed"); see $state/run.log"
+    else echo "idle"
+    fi
+    [ -f "$state/progress" ] && sed 's/^/  /' "$state/progress"
+    echo
+    [ -f "$state/report.txt" ] && sed -n '1,/^$/p' "$state/report.txt"
+    [ -f "$state/check.txt" ] && head -5 "$state/check.txt"
+    echo "full report: $state/report.txt   log: $state/run.log"
     ;;
 log)
     exec tail -n 40 -F "$state/run.log"
+    ;;
+autostart)
+    tag="# romsort-autostart $state"
+    line="*/10 * * * * $(printf %q "$self") resume --config $(printf %q "$cfg") >/dev/null 2>&1 $tag"
+    if ! cur=$(crontab -l 2>/dev/null); then
+        # No crontab yet is fine; any other failure must not wipe the crontab.
+        crontab -l 2>&1 | grep -qi 'no crontab' || { echo "romsort: cannot read crontab; not touching it" >&2; exit 1; }
+        cur=
+    fi
+    rest=$(printf '%s\n' "$cur" | grep -vF -- "$tag" || true)
+    case ${1:-on} in
+    on)  printf '%s\n' "$rest" "$line" | sed '/^$/d' | crontab - && echo "romsort: will resume within 10 min of any interruption or reboot" ;;
+    off) printf '%s\n' "$rest" | sed '/^$/d' | crontab - && echo "romsort: autostart off" ;;
+    *)   echo "romsort: autostart on|off" >&2; exit 2 ;;
+    esac
     ;;
 plan|build|check)
     mkdir -p "$state"
     exec 9>"$state/lock"
     flock -n 9 || { echo "romsort: another run holds $state/lock" >&2; exit 1; }
-    echo "=== romsort $* $(date -Is)"
-    exec "$lua" "$here/romsort.lua" "$@"
+    echo "=== romsort $cmd $* $(date '+%a %F %T %Z')"
+    exec "$lua" "$here/romsort.lua" "$cmd" "$@" --config "$cfg"
     ;;
 *)
-    exec "$lua" "$here/romsort.lua" "$@"
+    exec "$lua" "$here/romsort.lua" "$cmd" "$@"
     ;;
 esac

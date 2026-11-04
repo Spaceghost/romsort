@@ -95,7 +95,8 @@ end
 
 -- Hash every file in `files` that the cache does not already know. Appends to
 -- the cache files as it goes, so an interrupted scan resumes where it stopped.
-function M.hash(files, state, jobs)
+function M.hash(files, state, jobs, label)
+  label = label or ''
   U.mkdirp(state)
   local fpath, mpath = state .. '/files.tsv', state .. '/members.tsv'
   local fcache = load_cache(fpath, FILE_COLS)
@@ -109,7 +110,7 @@ function M.hash(files, state, jobs)
   local todo, bytes, by_path = {}, 0, {}
   for _, f in ipairs(files) do
     local c = fcache[f.path]
-    if c and c.size == tostring(f.size) and c.mtime == f.mtime and c.sha1 ~= '' then
+    if c and c.size == tostring(f.size) and c.mtime == f.mtime and c.sha1 and #c.sha1 == 40 then
       f.sha1, f.hsha1 = c.sha1, c.hsha1 ~= '-' and c.hsha1 or nil
     else
       todo[#todo + 1] = f
@@ -140,9 +141,10 @@ function M.hash(files, state, jobs)
           if f.hsha1 then f.hsha1 = f.hsha1:upper() end
         end
         fout:write(U.tsv_line(f.path, f.size, f.mtime, f.inode, f.sha1, f.hsha1 or '-'))
+        fout:flush() -- every hash survives a crash or reboot
         n, done = n + 1, done + f.size
+        U.progress('hash ' .. label, done / 2 ^ 30, bytes / 2 ^ 30, 'GiB')
         if n % 500 == 0 then
-          fout:flush()
           U.log('hash: %d/%d files, %.1f/%.1f GiB', n, #todo, done / 2 ^ 30, bytes / 2 ^ 30)
         end
       end
@@ -153,9 +155,12 @@ function M.hash(files, state, jobs)
   fout:close()
 
   local mout = assert(io.open(mpath, 'ab'))
-  local listed = 0
+  local listed, narch, seen = 0, 0, 0
+  for _, f in ipairs(files) do if ARCHIVE[U.ext(f.path)] then narch = narch + 1 end end
   for _, f in ipairs(files) do
     if ARCHIVE[U.ext(f.path)] then
+      seen = seen + 1
+      U.progress('list archives ' .. label, seen, narch, 'archives')
       local key = f.path .. '\0' .. f.size .. '\0' .. f.mtime
       local m = mcache[key]
       if not m then
@@ -166,6 +171,7 @@ function M.hash(files, state, jobs)
         for _, r in ipairs(m) do
           mout:write(U.tsv_line(f.path, f.size, f.mtime, r.member, r.msize, r.crc))
         end
+        mout:flush()
         listed = listed + 1
       end
       f.members = m

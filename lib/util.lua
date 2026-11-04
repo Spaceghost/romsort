@@ -12,6 +12,44 @@ function M.sh(cmd)
   return ok == true and (code == nil or code == 0)
 end
 
+-- Progress: a small file rewritten in place (at most every 10 s) saying which
+-- step the run is on, how far through it, and when that step should finish.
+-- `romsort status` prints it; nothing needs to watch the run.
+local P = { last = 0 }
+
+function M.progress_to(path) P.path = path end
+
+local function dur(s)
+  s = math.floor(s + 0.5)
+  if s < 90 then return s .. 's' end
+  if s < 5400 then return math.floor(s / 60 + 0.5) .. 'm' end
+  return string.format('%dh%02dm', math.floor(s / 3600), math.floor(s % 3600 / 60))
+end
+
+-- done/total are optional numbers counted in `unit` (files, GiB, ops).
+function M.progress(step, done, total, unit, force)
+  if not P.path then return end
+  local now = os.time()
+  if step ~= P.step then P.step, P.t0, P.d0, force = step, now, done or 0, true end
+  if not force and now - P.last < 10 then return end
+  P.last = now
+  P.started = P.started or now
+  local lines = { 'step:    ' .. step }
+  if done and total and total > 0 then
+    local fmt = unit == 'GiB' and '%.1f' or '%d'
+    lines[#lines + 1] = string.format('done:    ' .. fmt .. ' / ' .. fmt .. ' %s (%.1f%%)',
+      done, total, unit or '', 100 * done / total)
+    local el = now - P.t0
+    if el >= 30 and done > P.d0 then
+      local left = (total - done) / ((done - P.d0) / el)
+      lines[#lines + 1] = string.format('eta:     %s (%s left in this step)', os.date('%a %H:%M', now + left), dur(left))
+    end
+  end
+  lines[#lines + 1] = string.format('updated: %s (run started %s, %s ago)',
+    os.date('%a %Y-%m-%d %H:%M:%S', now), os.date('%a %H:%M', P.started), dur(now - P.started))
+  M.write_atomic(P.path, table.concat(lines, '\n') .. '\n')
+end
+
 function M.die(fmt, ...)
   io.stderr:write('romsort: ', string.format(fmt, ...), '\n')
   os.exit(1)

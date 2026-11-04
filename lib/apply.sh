@@ -9,10 +9,13 @@
 #   unlink  remove dst only if it is the same inode as src
 #   drop    remove dst (caller verified it is our unmodified copy)
 #
-# Prints one line per op that did something or was refused.
+# Prints one line per op that did something or was refused, and
+# "PROGRESS <n>" every 1000 ops. Every op is atomic and safe to repeat, so an
+# interrupted run is finished by simply running it again.
 set -u
-lastdir=
+lastdir= n=0
 while IFS= read -r -d '' op && IFS= read -r -d '' src && IFS= read -r -d '' dst; do
+    n=$((n + 1)); [ $((n % 1000)) -ne 0 ] || echo "PROGRESS $n"
     dir=${dst%/*}
     case $op in
     link|copy|recopy)
@@ -29,7 +32,8 @@ while IFS= read -r -d '' op && IFS= read -r -d '' src && IFS= read -r -d '' dst;
         if [ -e "$dst" ]; then
             cmp -s -- "$src" "$dst" || echo "KEPT $dst"
         else
-            cp -p -- "$src" "$dst" && echo "COPY $dst" || echo "FAIL copy $dst"
+            cp -p -- "$src" "$dst.romsort-tmp" && mv -f -- "$dst.romsort-tmp" "$dst" \
+                && echo "COPY $dst" || echo "FAIL copy $dst"
         fi ;;
     recopy)
         cp -p -- "$src" "$dst.romsort-tmp" && mv -f -- "$dst.romsort-tmp" "$dst" \
