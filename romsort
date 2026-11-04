@@ -1,0 +1,38 @@
+#!/bin/bash
+# romsort - entry point. Everything else is in romsort.lua and lib/.
+#
+#   romsort plan | build | check | status     run in the foreground
+#   romsort start [build]                     run detached, log to the state dir
+#   romsort log                               follow the detached run
+set -euo pipefail
+here=$(cd "$(dirname "$(readlink -f "$0")")" && pwd)
+
+lua=
+for c in luajit lua5.4 lua5.3 lua5.1 lua; do
+    if command -v "$c" >/dev/null 2>&1; then lua=$c; break; fi
+done
+[ -n "$lua" ] || { echo "romsort: needs luajit or lua 5.1+" >&2; exit 1; }
+
+state=$("$lua" -e "local C=dofile('$here/config.lua'); io.write(C.state)")
+
+case "${1:-}" in
+start)
+    mkdir -p "$state"
+    shift
+    setsid nohup nice -n 10 "$0" "${@:-build}" >>"$state/run.log" 2>&1 < /dev/null &
+    echo "romsort: running detached (pid $!); follow with: $0 log"
+    ;;
+log)
+    exec tail -n 40 -F "$state/run.log"
+    ;;
+plan|build|check)
+    mkdir -p "$state"
+    exec 9>"$state/lock"
+    flock -n 9 || { echo "romsort: another run holds $state/lock" >&2; exit 1; }
+    echo "=== romsort $* $(date -Is)"
+    exec "$lua" "$here/romsort.lua" "$@"
+    ;;
+*)
+    exec "$lua" "$here/romsort.lua" "$@"
+    ;;
+esac

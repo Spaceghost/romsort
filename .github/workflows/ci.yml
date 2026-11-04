@@ -1,0 +1,26 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      matrix:
+        lua: [luajit, lua5.1, lua5.4]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - run: sudo apt-get install -y --no-install-recommends ${{ matrix.lua }} unzip zip
+      - name: End-to-end fixture test
+        env:
+          LUA: ${{ matrix.lua }}
+        run: test/run.sh
