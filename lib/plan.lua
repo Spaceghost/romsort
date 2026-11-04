@@ -73,7 +73,10 @@ function M:match(f, idx)
     if idx.games[dat .. '\0' .. game] ~= #f.members then return nil end
     return { game = game, dat = dat, archive = true }
   end
-  local hit = (f.sha1 and idx.sha1[f.sha1]) or (f.hsha1 and idx.sha1[f.hsha1])
+  local hit = f.sha1 and idx.sha1[f.sha1]
+  if not hit and f.hsha1 then -- headerless or untrimmed hashes, comma-separated
+    for h in f.hsha1:gmatch('[^,]+') do hit = hit or idx.sha1[h] end
+  end
   if hit and idx.games[hit.dat .. '\0' .. hit.game] == 1 then return hit end
   return nil
 end

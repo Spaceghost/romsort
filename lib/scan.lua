@@ -39,13 +39,46 @@ local function header_len(path, size)
   return 0
 end
 
+-- Handheld packs often ship GBA ROMs "trimmed": the padding up to the chip
+-- size cut off. No-Intro hashes the full chip, so pad back to the next power
+-- of two with 0xFF and with 0x00 (both occur) and hash each.
+local function trimmed(path, size)
+  if U.ext(path) ~= 'gba' or size > 32 * 2 ^ 20 then return nil end
+  local full = 256 * 1024
+  while full < size do full = full * 2 end
+  if full == size then return nil end
+  return full - size
+end
+
+local function sha1_of(cmd)
+  local p = io.popen(cmd .. ' | sha1sum')
+  local h = (p:read('*l') or ''):match('^(%x+)')
+  p:close()
+  return h and h:upper()
+end
+
+-- Extra hashes a DAT may know this file by, comma-separated, or nil: the hash
+-- without a copier header, or of the untrimmed ROM.
+local function alt_hashes(path, size)
+  local hl = header_len(path, size)
+  if hl > 0 then return sha1_of('tail -c +' .. (hl + 1) .. ' -- ' .. U.q(path)) end
+  local pad = trimmed(path, size)
+  if pad then
+    local ff = sha1_of('{ cat -- ' .. U.q(path) .. '; head -c ' .. pad .. " /dev/zero | tr '\\000' '\\377'; }")
+    local zero = sha1_of('{ cat -- ' .. U.q(path) .. '; head -c ' .. pad .. ' /dev/zero; }')
+    if ff and zero then return ff .. ',' .. zero end
+  end
+  return nil
+end
+
 local function load_cache(path, cols)
   local cache = {}
   for _, r in ipairs(U.tsv_read(path, cols)) do
     if cols == MEMBER_COLS then
       local key = r.path .. '\0' .. r.size .. '\0' .. r.mtime
       local list = cache[key] or {}
-      if r.member ~= '' then list[#list + 1] = r end
+      if r.member ~= '' then list[#list + 1] = r
+      elseif r.crc == '' and U.ext(r.path) ~= 'zip' then list.unlisted = true end
       cache[key] = list
     else
       cache[r.path] = r -- last row wins: the file is append-only
@@ -64,11 +97,16 @@ local function parse_sha1_line(line)
 end
 
 local ARCHIVE = { zip = true, ['7z'] = true, rar = true }
+local unzip
+function M.have_unzip()
+  if unzip == nil then unzip = U.sh('command -v unzip >/dev/null 2>&1') end
+  return unzip
+end
 
 local function list_members(path, have7z)
   local out = {}
   local e = U.ext(path)
-  if e == 'zip' and not have7z then
+  if e == 'zip' and (not have7z or M.have_unzip()) then -- local unzip: fast, no container
     local p = io.popen('unzip -lv -- ' .. U.q(path) .. ' 2>/dev/null')
     for line in p:lines() do
       local len, crc, name = line:match('^%s*(%d+)%s+%S+%s+%d+%s+%S+%s+%S+%s+%S+%s+(%x%x%x%x%x%x%x%x)%s+(.+)$')
@@ -93,6 +131,23 @@ local function list_members(path, have7z)
   return out
 end
 
+-- The command that lists .7z/.rar archives, or nil. M.seven_zip (set from
+-- config) is a list of candidate commands, tried in order; each must accept
+-- `l -slt -ba -- <host path>`. Probed once per run.
+M.seven_zip = { '7zz', '7z' }
+local lister
+function M.lister()
+  if lister ~= nil then return lister or nil end
+  lister = false
+  for _, cmd in ipairs(M.seven_zip) do
+    if U.sh(cmd .. ' i >/dev/null 2>&1') then lister = cmd break end
+  end
+  if lister then U.log('archives: .7z/.rar listed with: %s', lister)
+  else U.log('note: no working 7z (%s), so .7z/.rar contents are not matched this run (zip still is);'
+    .. ' they are listed on the first run that has one', table.concat(M.seven_zip, ' | ')) end
+  return lister or nil
+end
+
 -- Hash every file in `files` that the cache does not already know. Appends to
 -- the cache files as it goes, so an interrupted scan resumes where it stopped.
 function M.hash(files, state, jobs, label)
@@ -101,17 +156,14 @@ function M.hash(files, state, jobs, label)
   local fpath, mpath = state .. '/files.tsv', state .. '/members.tsv'
   local fcache = load_cache(fpath, FILE_COLS)
   local mcache = load_cache(mpath, MEMBER_COLS)
-  local have7z
-  for _, t in ipairs({ '7zz', '7z' }) do
-    if U.sh('command -v ' .. t .. ' >/dev/null 2>&1') then have7z = t break end
-  end
-  if not have7z then U.log('note: no 7z, so .7z/.rar contents are not matched (zip still is)') end
 
-  local todo, bytes, by_path = {}, 0, {}
+  local todo, bytes, by_path, rehash = {}, 0, {}, {}
   for _, f in ipairs(files) do
     local c = fcache[f.path]
     if c and c.size == tostring(f.size) and c.mtime == f.mtime and c.sha1 and #c.sha1 == 40 then
       f.sha1, f.hsha1 = c.sha1, c.hsha1 ~= '-' and c.hsha1 or nil
+      -- cached before untrimming existed: only the extra hashes are missing
+      if c.hsha1 == '-' and trimmed(f.path, f.size) then rehash[#rehash + 1] = f end
     else
       todo[#todo + 1] = f
       bytes = bytes + f.size
@@ -133,13 +185,7 @@ function M.hash(files, state, jobs, label)
       local f = name and by_path[name]
       if f then
         f.sha1 = h:upper()
-        local hl = header_len(f.path, f.size)
-        if hl > 0 then
-          local hp = io.popen('tail -c +' .. (hl + 1) .. ' -- ' .. U.q(f.path) .. ' | sha1sum')
-          f.hsha1 = (hp:read('*l') or ''):match('^(%x+)')
-          hp:close()
-          if f.hsha1 then f.hsha1 = f.hsha1:upper() end
-        end
+        f.hsha1 = alt_hashes(f.path, f.size)
         fout:write(U.tsv_line(f.path, f.size, f.mtime, f.inode, f.sha1, f.hsha1 or '-'))
         fout:flush() -- every hash survives a crash or reboot
         n, done = n + 1, done + f.size
@@ -152,8 +198,20 @@ function M.hash(files, state, jobs, label)
     p:close()
     os.remove(list)
   end
+  if #rehash > 0 then U.log('hash: %d trimmed ROMs get untrimmed hashes', #rehash) end
+  for i, f in ipairs(rehash) do
+    f.hsha1 = alt_hashes(f.path, f.size)
+    fout:write(U.tsv_line(f.path, f.size, f.mtime, f.inode, f.sha1, f.hsha1 or '-'))
+    fout:flush()
+    U.progress('untrim ' .. label, i, #rehash, 'ROMs')
+  end
   fout:close()
 
+  local have7z
+  for _, f in ipairs(files) do
+    local e = U.ext(f.path)
+    if e == '7z' or e == 'rar' or (e == 'zip' and not M.have_unzip()) then have7z = M.lister() break end
+  end
   local mout = assert(io.open(mpath, 'ab'))
   local listed, narch, seen = 0, 0, 0
   for _, f in ipairs(files) do if ARCHIVE[U.ext(f.path)] then narch = narch + 1 end end
@@ -163,10 +221,12 @@ function M.hash(files, state, jobs, label)
       U.progress('list archives ' .. label, seen, narch, 'archives')
       local key = f.path .. '\0' .. f.size .. '\0' .. f.mtime
       local m = mcache[key]
-      if not m then
+      -- A 7z/rar seen while no 7z was available was never really listed.
+      if m and m.unlisted and #m == 0 and have7z then m = nil end
+      if not m and (have7z or U.ext(f.path) == 'zip') then
         m = list_members(f.path, have7z)
-        if #m == 0 then
-          mout:write(U.tsv_line(f.path, f.size, f.mtime, '', '', ''))
+        if #m == 0 then -- crc '-' marks "listed, and it really is empty"
+          mout:write(U.tsv_line(f.path, f.size, f.mtime, '', '', '-'))
         end
         for _, r in ipairs(m) do
           mout:write(U.tsv_line(f.path, f.size, f.mtime, r.member, r.msize, r.crc))
@@ -174,7 +234,7 @@ function M.hash(files, state, jobs, label)
         mout:flush()
         listed = listed + 1
       end
-      f.members = m
+      f.members = m or {}
     end
   end
   mout:close()

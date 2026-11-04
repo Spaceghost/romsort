@@ -5,6 +5,7 @@ package.path = here .. '/lib/?.lua;' .. here .. '/?.lua;' .. package.path
 
 local U = require('util')
 local SCAN = require('scan')
+local REPAIR = require('repair')
 local LB = require('launchbox')
 local PLAN = require('plan')
 
@@ -33,6 +34,7 @@ if not cmd or cmd == '-h' or cmd == '--help' or cmd == 'help' then
   os.exit(cmd and 0 or 2)
 end
 local C = dofile(cfg_path)
+if C.seven_zip then SCAN.seven_zip = C.seven_zip end
 
 local function stat_one(path)
   local p = io.popen('find ' .. U.q(path) .. ' -maxdepth 0 -type f -printf "%s\\t%T@\\t%i" 2>/dev/null')
@@ -102,6 +104,13 @@ local function plan()
     end
   end
   U.log('launchbox paths: %d, resolving at source: %d, already missing at source: %d', nref, nres, nref - nres)
+  local nrep = REPAIR.apply(docs, REPAIR.index(all, planner.skip_ext))
+  for _, d in ipairs(docs) do
+    for _, r in ipairs(d.refs) do
+      if r.repair then planner:count('LaunchBox path repaired (' .. r.how .. ')') end
+    end
+  end
+  U.log('launchbox paths already broken but repaired: %d (see launchbox-repaired.tsv)', nrep)
   return planner, docs, by_path
 end
 
@@ -122,13 +131,15 @@ local function write_report(planner, docs, extra)
   for _, l in ipairs(extra or {}) do lines[#lines + 1] = l end
   U.write_atomic(C.state .. '/report.txt', table.concat(lines, '\n') .. '\n')
 
-  local miss = {}
+  local miss, rep = {}, {}
   for _, d in ipairs(docs) do
     for _, r in ipairs(d.refs) do
-      if not r.abs then miss[#miss + 1] = U.tsv_line(d.xml, r.tag, r.value) end
+      if r.repair then rep[#rep + 1] = U.tsv_line(d.xml, r.tag, r.value, r.how, r.repair)
+      elseif not r.abs then miss[#miss + 1] = U.tsv_line(d.xml, r.tag, r.value) end
     end
   end
   U.write_atomic(C.state .. '/launchbox-missing-at-source.tsv', table.concat(miss))
+  U.write_atomic(C.state .. '/launchbox-repaired.tsv', table.concat(rep))
 
   local pl = {}
   for _, o in ipairs(planner.ops) do pl[#pl + 1] = U.tsv_line(o.op, o.dst, o.src) end
@@ -266,7 +277,7 @@ check = function(planner, docs, by_path)
     docs = LB.scan(C.launchbox, C.drives, C.path_tag)
   end
   local out = list_out()
-  local broken, ok, premissing, inode_mismatch = {}, 0, 0, 0
+  local broken, ok, premissing, repaired, inode_mismatch = {}, 0, 0, 0, 0
   for _, d in ipairs(docs) do
     local text = U.read(C.out .. '/' .. d.xml)
     if not text then
@@ -281,8 +292,11 @@ check = function(planner, docs, by_path)
       else
         for i, r in ipairs(refs) do
           local src = d.refs[i]
-          if not src.abs then
+          if not src.abs and r.value == src.value then
             premissing = premissing + 1
+          elseif not src.abs then -- broken in the original, repaired here
+            if LB.resolve(r.value, C.out, C.drives) then repaired = repaired + 1
+            else broken[#broken + 1] = string.format('%s: %s repaired to %s, which does not resolve', d.xml, r.tag, r.value) end
           else
             local abs = LB.resolve(r.value, C.out, C.drives)
             if not abs then
@@ -308,8 +322,8 @@ check = function(planner, docs, by_path)
     end
   end
   local lines = {
-    string.format('check %s: %d paths ok, %d already missing in the original, %d problems',
-      #broken == 0 and 'PASSED' or 'FAILED', ok, premissing, #broken),
+    string.format('check %s: %d paths ok, %d repaired, %d already missing in the original, %d problems',
+      #broken == 0 and 'PASSED' or 'FAILED', ok, repaired, premissing, #broken),
   }
   for i = 1, math.min(#broken, 200) do lines[#lines + 1] = '  ' .. broken[i] end
   U.write_atomic(C.state .. '/check.txt', table.concat(lines, '\n') .. '\n')

@@ -159,6 +159,12 @@ C.copy_dirs = { 'Data' }
 -- LaunchBox XML tags that hold file or folder paths.
 C.path_tag = function(tag) return tag:match('Path$') or tag:match('Folder$') end
 
+-- Commands that can list .7z/.rar archives, tried in order. bak keeps 7-Zip
+-- (with its RAR codec) in the romsort-tools Incus container, which mounts
+-- /srv/roms read-only at the same path. If none works, zips are still matched
+-- and the 7z/rar files are listed on the next run that has one.
+C.seven_zip = { '7zz', '7z', 'incus exec --project default -n romsort-tools --user 1000 -- 7z' }
+
 C.jobs = tonumber(os.getenv('ROMSORT_JOBS') or '4')
 
 return C

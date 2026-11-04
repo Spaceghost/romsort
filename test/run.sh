@@ -26,7 +26,12 @@ printf 'boxart' > "$lb/Images/Nintendo Game Boy/Box - Front/Tetris-01.png"
 printf '<Settings>x</Settings>' > "$lb/Data/Settings.xml"
 cp "$lb/Games/Nintendo Game Boy/tetris final.gb" "$R/F/cards/c1/GB/Tetris.gb"   # dup of LB copy
 printf 'UNKNOWN-GB%.0s' {1..8} > "$R/F/cards/c1/GB/mystery.gb"
+mkdir -p "$lb/Games/Nintendo Game Boy/Moved GB-GRP"     # broken in LaunchBox: moved, extracted
+printf 'MOVED%.0s' {1..9} > "$lb/Games/Nintendo Game Boy/Moved GB-GRP/moved.gb"
+printf 'WARIO%.0s' {1..9} > "$lb/Games/Nintendo Game Boy/Wario Blast (USA) (En,Fr).gb"
 printf 'thumb' > "$R/F/cards/c1/GB/Imgs/mystery.png"
+mkdir -p "$R/F/cards/c1/GBA"                   # a trimmed GBA dump: padding cut off
+head -c 300000 /dev/zero | tr '\000' 'G' > "$R/F/cards/c1/GBA/001 Trimmed.gba"
 printf 'arcade' > "$R/F/cards/c1/MAME/sf2.zip"
 for c in c1 c2; do                     # the same set in a per-game folder on two cards
   mkdir -p "$R/F/cards/$c/MAME/000 Final Fight"; printf 'ffight-set' > "$R/F/cards/$c/MAME/000 Final Fight/ffight.zip"
@@ -50,6 +55,14 @@ game (
 )
 EOF
 
+g_sha=$( { cat "$R/F/cards/c1/GBA/001 Trimmed.gba"; head -c $((524288 - 300000)) /dev/zero | tr '\000' '\377'; } | sha1sum | cut -c1-40 | tr a-f A-F)
+cat > "$work/dats/no-intro/Nintendo - Game Boy Advance.dat" <<EOF
+game (
+	name "Trimmed Quest (USA)"
+	rom ( name "Trimmed Quest (USA).gba" size 524288 crc 00000000 sha1 $g_sha )
+)
+EOF
+
 cat > "$lb/Data/Platforms/Nintendo Game Boy.xml" <<'EOF'
 <?xml version="1.0" standalone="yes"?>
 <LaunchBox>
@@ -70,6 +83,14 @@ cat > "$lb/Data/Platforms/Nintendo Game Boy.xml" <<'EOF'
   <Game>
     <ApplicationPath>J:\Games\Nintendo DS\gone forever.nds</ApplicationPath>
     <ID>4</ID>
+  </Game>
+  <Game>
+    <ApplicationPath>J:\Games\Nintendo Game Boy\moved.gb</ApplicationPath>
+    <ID>7</ID>
+  </Game>
+  <Game>
+    <ApplicationPath>J:\Games\Nintendo Game Boy\GB.Pack.0001-GRP\0042 - Wario Blast (USA).zip</ApplicationPath>
+    <ID>8</ID>
   </Game>
   <AdditionalApplication>
     <ApplicationPath>Games\Nintendo Game Boy\Packs\tetris copy.gb</ApplicationPath>
@@ -114,6 +135,7 @@ C.sources = {
   { label = 'c2', root = '$R/F/cards/c2', layout = 'folders' },
 }
 C.jobs = 2
+C.seven_zip = { '7zz', '7z' } -- never the container: test paths are not mounted there
 return C
 EOF
 before=$(cd "$R" && find F P -type f -exec sha1sum {} + | sort)
@@ -138,6 +160,7 @@ pass "first build and check pass"
 [ -f "$out/Games/Nintendo Game Boy/Unverified/mystery.gb" ] || fail "card unmatched -> Unverified"
 [ ! -e "$out/Games/Nintendo Game Boy/Unverified/Imgs/mystery.png" ] || fail "card thumbnails skipped"
 [ -f "$out/Games/Arcade/sf2.zip" ] || fail "arcade kept by set name"
+[ -f "$out/Games/Nintendo Game Boy Advance/Trimmed Quest (USA).gba" ] || fail "trimmed GBA matched once padded"
 [ "$(find "$out/Games" -name 'Tetris*' | wc -l)" = 1 ] || fail "card duplicate deduped"
 [ "$(find "$out/Games/Arcade" -name 'ffight*' | wc -l)" = 1 ] || fail "same set on two cards placed once"
 ! grep -q 'conflict=' "$work/build1.log" || fail "no conflicting ops in the plan"
@@ -155,6 +178,9 @@ grep -q "Link's Awakening (USA, Europe).zip</ApplicationPath>" "$x" || fail "J: 
 grep -q '<ApplicationPath>J:\\Games\\Nintendo DS\\gone forever.nds</ApplicationPath>' "$x" || fail "missing path left untouched"
 grep -q '<Title>Link&apos;s Awakening &amp; Friends</Title>\|<Title>Link'"'"'s Awakening &amp; Friends</Title>' "$x" || fail "non-path XML preserved"
 grep -q '<Folder>Games\\Sony PSP</Folder>' "$out/Data/Platforms.xml" || fail "platform folder rewritten"
+grep -q '<ApplicationPath>Games\\Nintendo Game Boy\\Moved GB-GRP\\moved.gb</ApplicationPath>' "$x" || fail "broken path repaired by file name"
+grep -q '<ApplicationPath>Games\\Nintendo Game Boy\\Wario Blast (USA) (En,Fr).gb</ApplicationPath>' "$x" || fail "broken pack path repaired by title"
+grep -q 'check PASSED: .* 2 repaired, 1 already missing' "$R/sorted/.romsort/check.txt" || { cat "$R/sorted/.romsort/check.txt"; fail "check counts repairs"; }
 pass "LaunchBox XML rewritten, everything else preserved"
 
 after=$(cd "$R" && find F P -type f -exec sha1sum {} + | sort)

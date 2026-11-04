@@ -12,7 +12,7 @@ function M.load(paths)
       U.log('!! missing DAT %s', path)
     else
       local dat = U.basename(path):gsub('%.dat$', '')
-      for block in s:gmatch('\ngame %((.-)\n%)') do
+      for block in ('\n' .. s):gmatch('\ngame %((.-)\n%)') do
         local game = block:match('\n%s*name "(.-)"\n')
         if game then
           local n = 0

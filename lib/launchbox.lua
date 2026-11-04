@@ -62,7 +62,8 @@ function M.refs_in(text, is_path_tag)
   while true do
     local s, e, tag, raw = text:find('<([%w_]+)>([^<]*)</%1>', pos)
     if not s then break end
-    if is_path_tag(tag) and raw ~= '' then
+    -- ShowGameMenuOpenFolder and friends hold booleans, not paths.
+    if is_path_tag(tag) and raw ~= '' and raw ~= 'true' and raw ~= 'false' then
       local vs = s + #tag + 2
       refs[#refs + 1] = { tag = tag, raw = raw, value = U.xml_unescape(raw), s = vs, e = vs + #raw - 1 }
     end
@@ -94,7 +95,8 @@ end
 function M.rewrite(doc, placed)
   local parts, last, changed = {}, 1, 0
   for _, r in ipairs(doc.refs) do
-    local dst = r.abs and placed(r.abs)
+    local from = r.abs or r.repair -- repair: broken in the original, found elsewhere
+    local dst = from and placed(from)
     if dst then
       local new = U.xml_escape(M.winpath(dst))
       if new ~= r.raw then
